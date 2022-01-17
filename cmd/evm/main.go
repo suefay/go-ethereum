@@ -101,6 +101,10 @@ var (
 		Name:  "prestate",
 		Usage: "JSON file with prestate (genesis) config",
 	}
+	DataDirFlag = cli.StringFlag{
+		Name:  "datadir",
+		Usage: "The node data path",
+	}
 	MachineFlag = cli.BoolFlag{
 		Name:  "json",
 		Usage: "output trace logs in machine readable format (json)",
@@ -206,6 +210,7 @@ func init() {
 		CPUProfileFlag,
 		StatDumpFlag,
 		GenesisFlag,
+		DataDirFlag,
 		MachineFlag,
 		SenderFlag,
 		ReceiverFlag,

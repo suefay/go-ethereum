@@ -133,7 +133,30 @@ func runCmd(ctx *cli.Context) error {
 	} else {
 		debugLogger = logger.NewStructLogger(logconfig)
 	}
-	if ctx.GlobalString(GenesisFlag.Name) != "" {
+
+	if ctx.GlobalString(DataDirFlag.Name) != "" {
+		db, err := rawdb.NewLevelDBDatabase(ctx.GlobalString(DataDirFlag.Name), 0, 0, "", false)
+		if err != nil {
+			return fmt.Errorf("failed to open db")
+		}
+
+		header := rawdb.ReadHeadHeader(db)
+		if header == nil {
+			return fmt.Errorf("failed to read the head block header")
+		}
+
+		statedb, err = state.New(header.Root, state.NewDatabase(db), nil)
+		if err != nil {
+			return fmt.Errorf("failed to create state db")
+		}
+
+		genesisConfig = new(core.Genesis)
+		genesisConfig.GasLimit = header.GasLimit
+		genesisConfig.Number = header.Number.Uint64()
+		genesisConfig.Difficulty = header.Difficulty
+		genesisConfig.Timestamp = header.Time
+		genesisConfig.Coinbase = header.Coinbase
+	} else if ctx.GlobalString(GenesisFlag.Name) != "" {
 		gen := readGenesis(ctx.GlobalString(GenesisFlag.Name))
 		genesisConfig = gen
 		db := rawdb.NewMemoryDatabase()
