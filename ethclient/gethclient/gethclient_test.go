@@ -293,7 +293,7 @@ func testCallContract(t *testing.T, client *rpc.Client) {
 		Value:    big.NewInt(1),
 	}
 	// CallContract without override
-	if _, err := ec.CallContract(context.Background(), msg, big.NewInt(0), nil, false, false); err != nil {
+	if _, err := ec.CallContract(context.Background(), msg, big.NewInt(0), nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// CallContract with override
@@ -302,7 +302,7 @@ func testCallContract(t *testing.T, client *rpc.Client) {
 	}
 	mapAcc := make(map[common.Address]OverrideAccount)
 	mapAcc[testAddr] = override
-	if _, err := ec.CallContract(context.Background(), msg, big.NewInt(0), &mapAcc, false, false); err != nil {
+	if _, err := ec.CallContract(context.Background(), msg, big.NewInt(0), &mapAcc); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

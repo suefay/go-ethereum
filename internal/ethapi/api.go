@@ -892,7 +892,7 @@ func (diff *StateOverride) Apply(state *state.StateDB) error {
 	return nil
 }
 
-func DoCall(ctx context.Context, b Backend, args TransactionArgs, blockNrOrHash rpc.BlockNumberOrHash, overrides *StateOverride, timeout time.Duration, globalGasCap uint64, debug, needLogs bool) (*core.ExecutionResult, error) {
+func DoCall(ctx context.Context, b Backend, args TransactionArgs, blockNrOrHash rpc.BlockNumberOrHash, overrides *StateOverride, timeout time.Duration, globalGasCap uint64, debug bool, needLogs bool) (*core.ExecutionResult, error) {
 	defer func(start time.Time) { log.Debug("Executing EVM call finished", "runtime", time.Since(start)) }(time.Now())
 
 	state, header, err := b.StateAndHeaderByNumberOrHash(ctx, blockNrOrHash)
@@ -920,13 +920,12 @@ func DoCall(ctx context.Context, b Backend, args TransactionArgs, blockNrOrHash 
 		return nil, err
 	}
 
-	// Extension: build debug tracer if debug mode enabled
+	// Build debug tracer if debug mode enabled
 	var debugLogger *logger.StructLogger
 	if debug {
 		debugLogger = logger.NewStructLogger(nil)
 	}
 
-	// Extension: add debug config to capture execution information
 	evm, vmError, err := b.GetEVM(ctx, msg, state, header, &vm.Config{Debug: debug, Tracer: debugLogger, NoBaseFee: true})
 	if err != nil {
 		return nil, err
@@ -953,7 +952,7 @@ func DoCall(ctx context.Context, b Backend, args TransactionArgs, blockNrOrHash 
 		return result, fmt.Errorf("err: %w (supplied gas %d)", err, msg.Gas())
 	}
 
-	// Extension: capture debug logs
+	// Return the evm debug trace
 	if debug {
 		err := debugHandler(debugLogger, result)
 		if err != nil {
@@ -961,7 +960,7 @@ func DoCall(ctx context.Context, b Backend, args TransactionArgs, blockNrOrHash 
 		}
 	}
 
-	// Extension: return logs if any
+	// Return evm call logs if any
 	if needLogs {
 		err := logHandler(state, result)
 		if err != nil {
@@ -972,7 +971,7 @@ func DoCall(ctx context.Context, b Backend, args TransactionArgs, blockNrOrHash 
 	return result, nil
 }
 
-// Extenstion: debugHandler encodes and appends debug logs to execution result
+// debugHandler encodes and appends the evm debug trace to execution result
 func debugHandler(debugLogger *logger.StructLogger, result *core.ExecutionResult) error {
 	logs := debugLogger.StructLogs()
 	for _, log := range logs {
@@ -987,7 +986,7 @@ func debugHandler(debugLogger *logger.StructLogger, result *core.ExecutionResult
 	return nil
 }
 
-// Extenstion: logHandler encodes and appends logs from statedb to execution result
+// logHandler encodes and appends the evm call logs from statedb to execution result
 func logHandler(state *state.StateDB, result *core.ExecutionResult) error {
 	logs := state.Logs()
 	for _, log := range logs {
@@ -1038,7 +1037,20 @@ func (e *revertError) ErrorData() interface{} {
 //
 // Note, this function doesn't make and changes in the state/blockchain and is
 // useful to execute and retrieve values.
-func (s *PublicBlockChainAPI) Call(ctx context.Context, args TransactionArgs, blockNrOrHash rpc.BlockNumberOrHash, overrides *StateOverride, debug, needLogs bool) (hexutil.Bytes, error) {
+func (s *PublicBlockChainAPI) Call(ctx context.Context, args TransactionArgs, blockNrOrHash rpc.BlockNumberOrHash, overrides *StateOverride) (hexutil.Bytes, error) {
+	result, err := DoCall(ctx, s.b, args, blockNrOrHash, overrides, s.b.RPCEVMTimeout(), s.b.RPCGasCap(), false, false)
+	if err != nil {
+		return nil, err
+	}
+	// If the result contains a revert reason, try to unpack and return it.
+	if len(result.Revert()) > 0 {
+		return nil, newRevertError(result)
+	}
+	return result.Return(), result.Err
+}
+
+// CallEx extends Call with the `debug` and `needLogs` arguments
+func (s *PublicBlockChainAPI) CallEx(ctx context.Context, args TransactionArgs, blockNrOrHash rpc.BlockNumberOrHash, overrides *StateOverride, debug, needLogs bool) (hexutil.Bytes, error) {
 	result, err := DoCall(ctx, s.b, args, blockNrOrHash, overrides, s.b.RPCEVMTimeout(), s.b.RPCGasCap(), debug, needLogs)
 	if err != nil {
 		return nil, err
