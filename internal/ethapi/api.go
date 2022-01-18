@@ -892,7 +892,7 @@ func (diff *StateOverride) Apply(state *state.StateDB) error {
 	return nil
 }
 
-func DoCall(ctx context.Context, b Backend, args TransactionArgs, blockNrOrHash rpc.BlockNumberOrHash, overrides *StateOverride, timeout time.Duration, globalGasCap uint64, debug bool, needLogs bool) (*core.ExecutionResult, error) {
+func DoCall(ctx context.Context, b Backend, args TransactionArgs, blockNrOrHash rpc.BlockNumberOrHash, overrides *StateOverride, timeout time.Duration, globalGasCap uint64) (*core.ExecutionResult, error) {
 	defer func(start time.Time) { log.Debug("Executing EVM call finished", "runtime", time.Since(start)) }(time.Now())
 
 	state, header, err := b.StateAndHeaderByNumberOrHash(ctx, blockNrOrHash)
@@ -920,13 +920,7 @@ func DoCall(ctx context.Context, b Backend, args TransactionArgs, blockNrOrHash 
 		return nil, err
 	}
 
-	// Build debug tracer if debug mode enabled
-	var debugLogger *logger.StructLogger
-	if debug {
-		debugLogger = logger.NewStructLogger(nil)
-	}
-
-	evm, vmError, err := b.GetEVM(ctx, msg, state, header, &vm.Config{Debug: debug, Tracer: debugLogger, NoBaseFee: true})
+	evm, vmError, err := b.GetEVM(ctx, msg, state, header, &vm.Config{NoBaseFee: true})
 	if err != nil {
 		return nil, err
 	}
@@ -952,53 +946,120 @@ func DoCall(ctx context.Context, b Backend, args TransactionArgs, blockNrOrHash 
 		return result, fmt.Errorf("err: %w (supplied gas %d)", err, msg.Gas())
 	}
 
-	// Return the evm debug trace
-	if debug {
-		err := debugHandler(debugLogger, result)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// Return evm call logs if any
-	if needLogs {
-		err := logHandler(state, result)
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	return result, nil
 }
 
-// debugHandler encodes and appends the evm debug trace to execution result
-func debugHandler(debugLogger *logger.StructLogger, result *core.ExecutionResult) error {
+// DoCallEx extends DoCall to retrieve the evm debug trace and logs
+func DoCallEx(ctx context.Context, b Backend, args TransactionArgs, blockNrOrHash rpc.BlockNumberOrHash, overrides *StateOverride, timeout time.Duration, globalGasCap uint64, debug bool, needLogs bool) (*core.ExecutionResult, []byte, []byte, error) {
+	defer func(start time.Time) { log.Debug("Executing EVM call finished", "runtime", time.Since(start)) }(time.Now())
+
+	state, header, err := b.StateAndHeaderByNumberOrHash(ctx, blockNrOrHash)
+	if state == nil || err != nil {
+		return nil, nil, nil, err
+	}
+	if err := overrides.Apply(state); err != nil {
+		return nil, nil, nil, err
+	}
+	// Setup context so it may be cancelled the call has completed
+	// or, in case of unmetered gas, setup a context with a timeout.
+	var cancel context.CancelFunc
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+	} else {
+		ctx, cancel = context.WithCancel(ctx)
+	}
+	// Make sure the context is cancelled when the call has completed
+	// this makes sure resources are cleaned up.
+	defer cancel()
+
+	// Get a new instance of the EVM.
+	msg, err := args.ToMessage(globalGasCap, header.BaseFee)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	// Build debug tracer if debug mode enabled
+	var debugLogger *logger.StructLogger
+	if debug {
+		debugLogger = logger.NewStructLogger(nil)
+	}
+
+	evm, vmError, err := b.GetEVM(ctx, msg, state, header, &vm.Config{Debug: debug, Tracer: debugLogger, NoBaseFee: true})
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	// Wait for the context to be done and cancel the evm. Even if the
+	// EVM has finished, cancelling may be done (repeatedly)
+	go func() {
+		<-ctx.Done()
+		evm.Cancel()
+	}()
+
+	// Execute the message.
+	gp := new(core.GasPool).AddGas(math.MaxUint64)
+	result, err := core.ApplyMessage(evm, msg, gp)
+	if err := vmError(); err != nil {
+		return nil, nil, nil, err
+	}
+
+	// If the timer caused an abort, return an appropriate error message
+	if evm.Cancelled() {
+		return nil, nil, nil, fmt.Errorf("execution aborted (timeout = %v)", timeout)
+	}
+	if err != nil {
+		return result, nil, nil, fmt.Errorf("err: %w (supplied gas %d)", err, msg.Gas())
+	}
+
+	var trace []byte
+	var logs []byte
+
+	// Get the evm debug trace
+	if debug {
+		trace, err = getDebugTrace(debugLogger)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+	}
+
+	// Get evm call logs
+	if needLogs {
+		logs, err = getLogs(state)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+	}
+
+	return result, trace, logs, nil
+}
+
+// getDebugTrace gets the evm debug trace
+func getDebugTrace(debugLogger *logger.StructLogger) (trace []byte, err error) {
 	logs := debugLogger.StructLogs()
 	for _, log := range logs {
 		encodedLog, err := json.Marshal(log)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
-		result.ReturnData = append(result.ReturnData, encodedLog...)
+		trace = append(trace, encodedLog...)
 	}
 
-	return nil
+	return
 }
 
-// logHandler encodes and appends the evm call logs from statedb to execution result
-func logHandler(state *state.StateDB, result *core.ExecutionResult) error {
-	logs := state.Logs()
-	for _, log := range logs {
+// getLogs gets the evm call logs from state db
+func getLogs(state *state.StateDB) (logs []byte, err error) {
+	stateLogs := state.Logs()
+	for _, log := range stateLogs {
 		encodedLog, err := json.Marshal(log)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
-		result.ReturnData = append(result.ReturnData, encodedLog...)
+		logs = append(logs, encodedLog...)
 	}
 
-	return nil
+	return
 }
 
 func newRevertError(result *core.ExecutionResult) *revertError {
@@ -1038,7 +1099,7 @@ func (e *revertError) ErrorData() interface{} {
 // Note, this function doesn't make and changes in the state/blockchain and is
 // useful to execute and retrieve values.
 func (s *PublicBlockChainAPI) Call(ctx context.Context, args TransactionArgs, blockNrOrHash rpc.BlockNumberOrHash, overrides *StateOverride) (hexutil.Bytes, error) {
-	result, err := DoCall(ctx, s.b, args, blockNrOrHash, overrides, s.b.RPCEVMTimeout(), s.b.RPCGasCap(), false, false)
+	result, err := DoCall(ctx, s.b, args, blockNrOrHash, overrides, s.b.RPCEVMTimeout(), s.b.RPCGasCap())
 	if err != nil {
 		return nil, err
 	}
@@ -1049,9 +1110,9 @@ func (s *PublicBlockChainAPI) Call(ctx context.Context, args TransactionArgs, bl
 	return result.Return(), result.Err
 }
 
-// CallEx extends Call with the `debug` and `needLogs` arguments
-func (s *PublicBlockChainAPI) CallEx(ctx context.Context, args TransactionArgs, blockNrOrHash rpc.BlockNumberOrHash, overrides *StateOverride, debug, needLogs bool) (hexutil.Bytes, error) {
-	result, err := DoCall(ctx, s.b, args, blockNrOrHash, overrides, s.b.RPCEVMTimeout(), s.b.RPCGasCap(), debug, needLogs)
+// CallEx extends Call to retrieve the evm debug trace and logs
+func (s *PublicBlockChainAPI) CallEx(ctx context.Context, args TransactionArgs, blockNrOrHash rpc.BlockNumberOrHash, overrides *StateOverride, debug bool, needLogs bool) (hexutil.Bytes, error) {
+	result, trace, logs, err := DoCallEx(ctx, s.b, args, blockNrOrHash, overrides, s.b.RPCEVMTimeout(), s.b.RPCGasCap(), debug, needLogs)
 	if err != nil {
 		return nil, err
 	}
@@ -1059,7 +1120,20 @@ func (s *PublicBlockChainAPI) CallEx(ctx context.Context, args TransactionArgs, 
 	if len(result.Revert()) > 0 {
 		return nil, newRevertError(result)
 	}
-	return result.Return(), result.Err
+
+	if result.Err != nil {
+		return result.Return(), result.Err
+	}
+
+	// Build ExecutionResultEx
+	resultEx := ExecutionResultEx{
+		GasUsed:    result.UsedGas,
+		ReturnData: result.ReturnData,
+		DebugTrace: trace,
+		Logs:       logs,
+	}
+
+	return json.Marshal(resultEx)
 }
 
 func DoEstimateGas(ctx context.Context, b Backend, args TransactionArgs, blockNrOrHash rpc.BlockNumberOrHash, gasCap uint64) (hexutil.Uint64, error) {
@@ -1136,7 +1210,7 @@ func DoEstimateGas(ctx context.Context, b Backend, args TransactionArgs, blockNr
 	executable := func(gas uint64) (bool, *core.ExecutionResult, error) {
 		args.Gas = (*hexutil.Uint64)(&gas)
 
-		result, err := DoCall(ctx, b, args, blockNrOrHash, nil, 0, gasCap, false, false)
+		result, err := DoCall(ctx, b, args, blockNrOrHash, nil, 0, gasCap)
 		if err != nil {
 			if errors.Is(err, core.ErrIntrinsicGas) {
 				return true, nil, nil // Special case, raise gas limit
@@ -2151,4 +2225,12 @@ func toHexSlice(b [][]byte) []string {
 		r[i] = hexutil.Encode(b[i])
 	}
 	return r
+}
+
+// ExecutionResultEx is a struct which extends ExecutionResult with debug trace and logs, and removes the Err field
+type ExecutionResultEx struct {
+	GasUsed    uint64 `json:"gasUsed"`
+	ReturnData []byte `json:"returnData"`
+	DebugTrace []byte `json:"debugTrace"`
+	Logs       []byte `json:"logs"`
 }
