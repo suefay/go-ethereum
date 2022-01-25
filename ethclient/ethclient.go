@@ -316,6 +316,11 @@ func (ec *Client) SubscribePendingTransactions(ctx context.Context, ch chan<- co
 	return ec.c.EthSubscribe(ctx, ch, "newPendingTransactions")
 }
 
+// SubscribePendingTransactions extends SubscribePendingTransactions to return the transaction itself instead of the hash
+func (ec *Client) SubscribePendingTransactionsEx(ctx context.Context, ch chan<- *types.Transaction) (*rpc.ClientSubscription, error) {
+	return ec.c.EthSubscribe(ctx, ch, "newPendingTransactionsEx")
+}
+
 // State Access
 
 // NetworkID returns the network ID (also known as the chain ID) for this chain.
