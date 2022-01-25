@@ -1998,6 +1998,21 @@ func (s *PublicTransactionPoolAPI) PendingTransactions() ([]*RPCTransaction, err
 	return transactions, nil
 }
 
+// AllPendingTransactions returns all transactions that are in the transaction pool.
+func (s *PublicTransactionPoolAPI) AllPendingTransactions() ([]*RPCTransaction, error) {
+	pending, err := s.b.GetPoolTransactions()
+	if err != nil {
+		return nil, err
+	}
+
+	transactions := make([]*RPCTransaction, 0, len(pending))
+	for _, tx := range pending {
+		transactions = append(transactions, newRPCPendingTransaction(tx, s.b.CurrentHeader(), s.b.ChainConfig()))
+	}
+
+	return transactions, nil
+}
+
 // Resend accepts an existing transaction and a new gas price and limit. It will remove
 // the given transaction from the pool and reinsert it with the new gas price and limit.
 func (s *PublicTransactionPoolAPI) Resend(ctx context.Context, sendArgs TransactionArgs, gasPrice *hexutil.Big, gasLimit *hexutil.Uint64) (common.Hash, error) {
