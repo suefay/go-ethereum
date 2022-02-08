@@ -150,7 +150,7 @@ func (api *PublicFilterAPI) NewPendingTransactions(ctx context.Context) (*rpc.Su
 	rpcSub := notifier.CreateSubscription()
 
 	go func() {
-		txHashes := make(chan []common.Hash, 128)
+		txHashes := make(chan []common.Hash, 1024)
 		pendingTxSub := api.events.SubscribePendingTxs(txHashes)
 
 		for {
