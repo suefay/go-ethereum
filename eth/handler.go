@@ -318,8 +318,8 @@ func (h *handler) runEthPeer(peer *eth.Peer, handler eth.Handler) error {
 		return err
 	}
 
-	// Disconnect the peer if its block number is behind the current block number by the threshold
-	if !h.trustedNodes[peer.ID()] {
+	if !h.trustedNodes[peer.ID()] && atomic.LoadUint32(&h.acceptTxs) == 1 {
+		// Disconnect the peer if its block number is behind the current block number by the threshold
 		peerHeadHash, _ := peer.Head()
 		peerHeadBlock := h.chain.GetBlockByHash(peerHeadHash)
 		if peerHeadBlock != nil && number-peerHeadBlock.NumberU64() > blockDelayThreshold {
@@ -487,6 +487,23 @@ func (h *handler) removePeer(id string) {
 	peer := h.peers.peer(id)
 	if peer != nil {
 		peer.Peer.Disconnect(p2p.DiscUselessPeer)
+	}
+}
+
+// removeUselessPeers removes useless peers whose block number falls behind by the threshold
+func (h *handler) removeUselessPeers() {
+	head := h.chain.CurrentBlock()
+	headBlockNumber := head.NumberU64()
+
+	if headBlockNumber > 0 {
+		destBlock := h.chain.GetBlockByNumber(headBlockNumber - blockDelayThreshold)
+		peers := h.peers.peersWithoutBlock(destBlock.Hash())
+
+		for _, p := range peers {
+			if !h.trustedNodes[p.ID()] {
+				h.removePeer(p.ID())
+			}
+		}
 	}
 }
 
