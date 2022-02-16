@@ -635,3 +635,16 @@ func copyAddressPtr(a *common.Address) *common.Address {
 	cpy := *a
 	return &cpy
 }
+
+// TxTimeRecord records the announcement time, request time and received time of the tx.
+type TxTimeRecord struct {
+	Ann  time.Time
+	Req  time.Time
+	Recv time.Time
+}
+
+// TransactionWithTimeRecord is a transaction wrapper with the tx time record
+type TransactionWithTimeRecord struct {
+	*Transaction
+	TimeRecord *TxTimeRecord
+}
