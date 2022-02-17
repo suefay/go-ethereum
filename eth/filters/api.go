@@ -195,8 +195,8 @@ func (api *PublicFilterAPI) NewPendingTransactionsEx(ctx context.Context, crit P
 					if crit.Match(tx) {
 						if withTimeRecord {
 							notifier.Notify(rpcSub.ID, &types.TransactionWithTimeRecord{
-								Transaction: tx,
-								TimeRecord:  api.backend.GetTxTimeRecord(tx.Hash()),
+								Tx:         tx,
+								TimeRecord: api.backend.GetTxTimeRecord(tx.Hash()),
 							})
 						} else {
 							notifier.Notify(rpcSub.ID, tx)
