@@ -220,22 +220,22 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		checkpoint = params.TrustedCheckpoints[genesisHash]
 	}
 	if eth.handler, err = newHandler(&handlerConfig{
-		Database:       chainDb,
-		Chain:          eth.blockchain,
-		TxPool:         eth.txPool,
-		Merger:         merger,
-		Network:        config.NetworkId,
-		Sync:           config.SyncMode,
-		BloomCache:     uint64(cacheLimit),
-		EventMux:       eth.eventMux,
-		Checkpoint:     checkpoint,
-		Whitelist:      config.Whitelist,
-		WhitelistNodes: eth.whitelistNodes(),
+		Database:           chainDb,
+		Chain:              eth.blockchain,
+		TxPool:             eth.txPool,
+		Merger:             merger,
+		Network:            config.NetworkId,
+		Sync:               config.SyncMode,
+		BloomCache:         uint64(cacheLimit),
+		EventMux:           eth.eventMux,
+		Checkpoint:         checkpoint,
+		PeerRequiredBlocks: config.PeerRequiredBlocks,
+		WhitelistNodes:     eth.whitelistNodes(),
 	}); err != nil {
 		return nil, err
 	}
 
-	eth.miner = miner.New(eth, &config.Miner, chainConfig, eth.EventMux(), eth.engine, eth.isLocalBlock, merger)
+	eth.miner = miner.New(eth, &config.Miner, chainConfig, eth.EventMux(), eth.engine, eth.isLocalBlock)
 	eth.miner.SetExtra(makeExtraData(config.Miner.ExtraData))
 
 	eth.APIBackend = &EthAPIBackend{stack.Config().ExtRPCEnabled(), stack.Config().AllowUnprotectedTxs, eth, nil}
