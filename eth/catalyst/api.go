@@ -44,15 +44,7 @@ func Register(stack *node.Node, backend *eth.Ethereum) error {
 			Namespace:     "engine",
 			Version:       "1.0",
 			Service:       NewConsensusAPI(backend),
-			Public:        true,
 			Authenticated: true,
-		},
-		{
-			Namespace:     "engine",
-			Version:       "1.0",
-			Service:       NewConsensusAPI(backend),
-			Public:        true,
-			Authenticated: false,
 		},
 	})
 	return nil
@@ -138,21 +130,35 @@ func (api *ConsensusAPI) ForkchoiceUpdatedV1(update beacon.ForkchoiceStateV1, pa
 			log.Error("TDs unavailable for TTD check", "number", block.NumberU64(), "hash", update.HeadBlockHash, "td", td, "parent", block.ParentHash(), "ptd", ptd)
 			return beacon.STATUS_INVALID, errors.New("TDs unavailable for TDD check")
 		}
-		if td.Cmp(ttd) < 0 || (block.NumberU64() > 0 && ptd.Cmp(ttd) > 0) {
+		if td.Cmp(ttd) < 0 {
 			log.Error("Refusing beacon update to pre-merge", "number", block.NumberU64(), "hash", update.HeadBlockHash, "diff", block.Difficulty(), "age", common.PrettyAge(time.Unix(int64(block.Time()), 0)))
 			return beacon.ForkChoiceResponse{PayloadStatus: beacon.INVALID_TERMINAL_BLOCK, PayloadID: nil}, nil
 		}
+		if block.NumberU64() > 0 && ptd.Cmp(ttd) >= 0 {
+			log.Error("Parent block is already post-ttd", "number", block.NumberU64(), "hash", update.HeadBlockHash, "diff", block.Difficulty(), "age", common.PrettyAge(time.Unix(int64(block.Time()), 0)))
+			return beacon.ForkChoiceResponse{PayloadStatus: beacon.INVALID_TERMINAL_BLOCK, PayloadID: nil}, nil
+		}
 	}
-
+	valid := func(id *beacon.PayloadID) beacon.ForkChoiceResponse {
+		return beacon.ForkChoiceResponse{
+			PayloadStatus: beacon.PayloadStatusV1{Status: beacon.VALID, LatestValidHash: &update.HeadBlockHash},
+			PayloadID:     id,
+		}
+	}
 	if rawdb.ReadCanonicalHash(api.eth.ChainDb(), block.NumberU64()) != update.HeadBlockHash {
 		// Block is not canonical, set head.
 		if latestValid, err := api.eth.BlockChain().SetCanonical(block); err != nil {
 			return beacon.ForkChoiceResponse{PayloadStatus: beacon.PayloadStatusV1{Status: beacon.INVALID, LatestValidHash: &latestValid}}, err
 		}
+	} else if api.eth.BlockChain().CurrentBlock().Hash() == update.HeadBlockHash {
+		// If the specified head matches with our local head, do nothing and keep
+		// generating the payload. It's a special corner case that a few slots are
+		// missing and we are requested to generate the payload in slot.
 	} else {
 		// If the head block is already in our canonical chain, the beacon client is
 		// probably resyncing. Ignore the update.
 		log.Info("Ignoring beacon update to old head", "number", block.NumberU64(), "hash", update.HeadBlockHash, "age", common.PrettyAge(time.Unix(int64(block.Time()), 0)), "have", api.eth.BlockChain().CurrentBlock().NumberU64())
+		return valid(nil), nil
 	}
 	api.eth.SetSynced()
 
@@ -184,12 +190,6 @@ func (api *ConsensusAPI) ForkchoiceUpdatedV1(update beacon.ForkchoiceStateV1, pa
 		if rawdb.ReadCanonicalHash(api.eth.ChainDb(), safeBlock.NumberU64()) != update.SafeBlockHash {
 			log.Warn("Safe block not in canonical chain")
 			return beacon.STATUS_INVALID, beacon.InvalidForkChoiceState.With(errors.New("safe block not in canonical chain"))
-		}
-	}
-	valid := func(id *beacon.PayloadID) beacon.ForkChoiceResponse {
-		return beacon.ForkChoiceResponse{
-			PayloadStatus: beacon.PayloadStatusV1{Status: beacon.VALID, LatestValidHash: &update.HeadBlockHash},
-			PayloadID:     id,
 		}
 	}
 	// If payload generation was requested, create a new block to be potentially
@@ -295,11 +295,16 @@ func (api *ConsensusAPI) NewPayloadV1(params beacon.ExecutableDataV1) (beacon.Pa
 	// We have an existing parent, do some sanity checks to avoid the beacon client
 	// triggering too early
 	var (
-		td  = api.eth.BlockChain().GetTd(parent.Hash(), parent.NumberU64())
-		ttd = api.eth.BlockChain().Config().TerminalTotalDifficulty
+		ptd  = api.eth.BlockChain().GetTd(parent.Hash(), parent.NumberU64())
+		ttd  = api.eth.BlockChain().Config().TerminalTotalDifficulty
+		gptd = api.eth.BlockChain().GetTd(parent.ParentHash(), parent.NumberU64()-1)
 	)
-	if td.Cmp(ttd) < 0 {
-		log.Warn("Ignoring pre-merge payload", "number", params.Number, "hash", params.BlockHash, "td", td, "ttd", ttd)
+	if ptd.Cmp(ttd) < 0 {
+		log.Warn("Ignoring pre-merge payload", "number", params.Number, "hash", params.BlockHash, "td", ptd, "ttd", ttd)
+		return beacon.INVALID_TERMINAL_BLOCK, nil
+	}
+	if parent.Difficulty().BitLen() > 0 && gptd != nil && gptd.Cmp(ttd) >= 0 {
+		log.Error("Ignoring pre-merge parent block", "number", params.Number, "hash", params.BlockHash, "td", ptd, "ttd", ttd)
 		return beacon.INVALID_TERMINAL_BLOCK, nil
 	}
 	if block.Time() <= parent.Time() {
@@ -345,7 +350,12 @@ func computePayloadId(headBlockHash common.Hash, params *beacon.PayloadAttribute
 func (api *ConsensusAPI) invalid(err error, latestValid *types.Block) beacon.PayloadStatusV1 {
 	currentHash := api.eth.BlockChain().CurrentBlock().Hash()
 	if latestValid != nil {
-		currentHash = latestValid.Hash()
+		// Set latest valid hash to 0x0 if parent is PoW block
+		currentHash = common.Hash{}
+		if latestValid.Difficulty().BitLen() == 0 {
+			// Otherwise set latest valid hash to parent hash
+			currentHash = latestValid.Hash()
+		}
 	}
 	errorMsg := err.Error()
 	return beacon.PayloadStatusV1{Status: beacon.INVALID, LatestValidHash: &currentHash, ValidationError: &errorMsg}
