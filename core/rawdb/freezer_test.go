@@ -278,10 +278,14 @@ func TestFreezerReadonlyValidate(t *testing.T) {
 	// Re-openening as readonly should fail when validating
 	// table lengths.
 <<<<<<< HEAD
+<<<<<<< HEAD
 	f, err = NewFreezer(dir, "", true, 2049, tables)
 =======
 	_, err = NewFreezer(dir, "", true, 2049, tables)
 >>>>>>> 8f2416a89a3def6ec2c749d5afafbf2c9a18e3c8
+=======
+	_, err = NewFreezer(dir, "", true, 2049, tables)
+>>>>>>> upstream/master
 	if err == nil {
 		t.Fatal("readonly freezer should fail with differing table lengths")
 	}
