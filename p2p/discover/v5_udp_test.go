@@ -379,7 +379,7 @@ func TestUDPv5_multipleHandshakeRounds(t *testing.T) {
 	// Ping answered by WHOAREYOU.
 	test.waitPacketOut(func(p *v5wire.Ping, addr *net.UDPAddr, nonce v5wire.Nonce) {
 		test.packetIn(&v5wire.Whoareyou{Nonce: nonce})
-	})
+	}
 	// Ping answered by WHOAREYOU again.
 	test.waitPacketOut(func(p *v5wire.Ping, addr *net.UDPAddr, nonce v5wire.Nonce) {
 		test.packetIn(&v5wire.Whoareyou{Nonce: nonce})
