@@ -107,6 +107,12 @@ func (p *testTxPool) Pending(enforceTips bool) map[common.Address]types.Transact
 	return batches
 }
 
+// IsLocal returns true if the given tx is a local transaction,
+// false otherwise.
+func (p *testTxPool) IsLocal(tx *types.Transaction) bool {
+	return false
+}
+
 // SubscribeNewTxsEvent should return an event subscription of NewTxsEvent and
 // send events to the given channel.
 func (p *testTxPool) SubscribeNewTxsEvent(ch chan<- core.NewTxsEvent) event.Subscription {

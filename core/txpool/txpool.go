@@ -577,6 +577,12 @@ func (pool *TxPool) Locals() []common.Address {
 	return pool.locals.flatten()
 }
 
+// IsLocal returns true if the given tx is a local transaction,
+// false otherwise.
+func (pool *TxPool) IsLocal(tx *types.Transaction) bool {
+	return pool.locals.containsTx(tx)
+}
+
 // local retrieves all currently known local transactions, grouped by origin
 // account and sorted by nonce. The returned transaction set is a copy and can be
 // freely modified by calling code.

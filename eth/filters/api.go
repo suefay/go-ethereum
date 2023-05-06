@@ -17,6 +17,7 @@
 package filters
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -147,7 +148,7 @@ func (api *FilterAPI) NewPendingTransactions(ctx context.Context, fullTx *bool) 
 	rpcSub := notifier.CreateSubscription()
 
 	go func() {
-		txs := make(chan []*types.Transaction, 128)
+		txs := make(chan []*types.Transaction, 1024)
 		pendingTxSub := api.events.SubscribePendingTxs(txs)
 		chainConfig := api.sys.backend.ChainConfig()
 
@@ -163,6 +164,43 @@ func (api *FilterAPI) NewPendingTransactions(ctx context.Context, fullTx *bool) 
 						notifier.Notify(rpcSub.ID, rpcTx)
 					} else {
 						notifier.Notify(rpcSub.ID, tx.Hash())
+					}
+				}
+			case <-rpcSub.Err():
+				pendingTxSub.Unsubscribe()
+				return
+			case <-notifier.Closed():
+				pendingTxSub.Unsubscribe()
+				return
+			}
+		}
+	}()
+
+	return rpcSub, nil
+}
+
+// NewPendingTransactionsEx extends NewPendingTransactions to notify the transaction itself instead of the transaction hash
+// and add the filter criteria
+func (api *FilterAPI) NewPendingTransactionsEx(ctx context.Context, crit PendingTransactionsFilterCriteria) (*rpc.Subscription, error) {
+	notifier, supported := rpc.NotifierFromContext(ctx)
+	if !supported {
+		return &rpc.Subscription{}, rpc.ErrNotificationsUnsupported
+	}
+
+	rpcSub := notifier.CreateSubscription()
+
+	go func() {
+		txs := make(chan []*types.Transaction, 1024)
+		pendingTxSub := api.events.SubscribePendingTxs(txs)
+
+		for {
+			select {
+			case txs := <-txs:
+				// To keep the original behaviour, send a single tx in one notification.
+				// TODO(rjl493456442) Send a batch of txs in one notification
+				for _, tx := range txs {
+					if crit.Match(tx) {
+						notifier.Notify(rpcSub.ID, tx)
 					}
 				}
 			case <-rpcSub.Err():
@@ -282,6 +320,53 @@ func (api *FilterAPI) Logs(ctx context.Context, crit FilterCriteria) (*rpc.Subsc
 // FilterCriteria represents a request to create a new filter.
 // Same as ethereum.FilterQuery but with UnmarshalJSON() method.
 type FilterCriteria ethereum.FilterQuery
+
+// PendingTransactionsFilterCriteria represents a request to create a new pending transaction filter
+type PendingTransactionsFilterCriteria struct {
+	Tos          []common.Address `json:"tos"`          // the recipient addresses to filter
+	DataPrefixes [][]byte         `json:"dataPrefixes"` // the prefixes of the data to filter
+}
+
+// Match checks if the given transaction satisfies the filter criteria
+func (crit *PendingTransactionsFilterCriteria) Match(tx *types.Transaction) bool {
+	return crit.MatchAddresses(tx) && crit.MatchDataPrefixes(tx)
+}
+
+// MatchAddresses checks if the given transaction satisfies the specified to addresses in the filter.
+func (crit *PendingTransactionsFilterCriteria) MatchAddresses(tx *types.Transaction) bool {
+	if len(crit.Tos) == 0 {
+		return true
+	}
+
+	matched := false
+
+	for _, to := range crit.Tos {
+		if tx.To() != nil && *tx.To() == to {
+			matched = true
+			break
+		}
+	}
+
+	return matched
+}
+
+// MatchDataPrefixes checks if the given transaction satisfies the specified data prefixes in the filter.
+func (crit *PendingTransactionsFilterCriteria) MatchDataPrefixes(tx *types.Transaction) bool {
+	if len(crit.DataPrefixes) == 0 {
+		return true
+	}
+
+	matched := false
+
+	for _, prefix := range crit.DataPrefixes {
+		if bytes.HasPrefix(tx.Data(), prefix) {
+			matched = true
+			break
+		}
+	}
+
+	return matched
+}
 
 // NewFilter creates a new filter and returns the filter id. It can be
 // used to retrieve logs when the state changes. This method cannot be
